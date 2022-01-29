@@ -1,437 +1,251 @@
+// ignore_for_file: import_of_legacy_library_into_null_safe
+
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:just_audio/just_audio.dart' as ap;
+import 'package:record/record.dart';
+// import 'package:record_example/audio_player.dart';
 
-Future<List> fetchAlbum() async {
-  final response =
-      await http.get(Uri.parse('https://jsonplaceholder.typicode.com/posts'));
+class AudioRecorder extends StatefulWidget {
+  final void Function(String path) onStop;
 
-  // if (response.statusCode == 200) {
-  //   // If the server did return a 200 OK response,
-  //   // then parse the JSON.
-  //   return Album.fromJson(jsonDecode(response.body));
-  // } else {
-  //   // If the server did not return a 200 OK response,
-  //   // then throw an exception.
-  //   throw Exception('Failed to load album');
-  // }
-  print(jsonDecode(response.body));
-  return jsonDecode(response.body);
-}
-
-// class Album {
-//   final int userId;
-//   final int id;
-//   final String title;
-
-//   const Album({
-//     required this.userId,
-//     required this.id,
-//     required this.title,
-//   });
-
-//   factory Album.fromJson(Map<String, dynamic> json) {
-//     return Album(
-//       userId: json['userId'],
-//       id: json['id'],
-//       title: json['title'],
-//     );
-//   }
-// }
-
-void main() => runApp(const MyApp());
-
-class MyApp extends StatefulWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const AudioRecorder({required this.onStop});
 
   @override
-  _MyAppState createState() => _MyAppState();
+  _AudioRecorderState createState() => _AudioRecorderState();
 }
 
-class _MyAppState extends State<MyApp> {
-  late Future<List> futureAlbum;
+class _AudioRecorderState extends State<AudioRecorder> {
+  bool _isRecording = false;
+  bool _isPaused = false;
+  int _recordDuration = 0;
+  Timer? _timer;
+  Timer? _ampTimer;
+  final _audioRecorder = Record();
+  Amplitude? _amplitude;
 
   @override
   void initState() {
+    _isRecording = false;
     super.initState();
-    futureAlbum = fetchAlbum();
-    // data12=futureAlbum.dat
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ampTimer?.cancel();
+    _audioRecorder.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Fetch Data Example',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
       home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Fetch Post Data'),
+        body: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                _buildRecordStopControl(),
+                const SizedBox(width: 20),
+                _buildPauseResumeControl(),
+                const SizedBox(width: 20),
+                _buildText(),
+              ],
+            ),
+            if (_amplitude != null) ...[
+              const SizedBox(height: 40),
+              Text('Current: ${_amplitude?.current ?? 0.0}'),
+              Text('Max: ${_amplitude?.max ?? 0.0}'),
+            ],
+          ],
         ),
-        // body: ListView(children: [futureAlbum?.map(e=>return Text(e.title))],)
-        body: FutureBuilder<dynamic>(
-          future: futureAlbum,
-          builder: (context, snapshot) {
-            if (snapshot.hasData) {
-              return ListView.builder(
-                itemCount: snapshot.data.length,
-                itemBuilder: (context, index) {
-                  return Builder(builder: (context) {
-                    return InkWell(
-                        child: SizedBox(
-                          child: ListTile(
-                            leading: Icon(Icons.wb_sunny),
-                            title: Text(snapshot.data[index]['title']),
-                            subtitle: Text(snapshot.data[index]['body']),
-                          ),
-                          height: 180,
-                        ),
-                        onTap: () =>
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                              content: Text(snapshot.data[index]['title']),
-                            )));
-                  });
+      ),
+    );
+  }
 
-                  // print(jsonDecode(jsonEncode(snapshot.data[index]))['title']);
-                  // print(index);
-                  // return Text("guru");
-                },
-              );
-              // return Text(snapshot.data!);
-            } else if (snapshot.hasError) {
-              return Text('${snapshot.error}');
-            }
+  Widget _buildRecordStopControl() {
+    late Icon icon;
+    late Color color;
 
-            // By default, show a loading spinner.
-            return Center(child: const CircularProgressIndicator());
+    if (_isRecording || _isPaused) {
+      icon = Icon(Icons.stop, color: Colors.red, size: 30);
+      color = Colors.red.withOpacity(0.1);
+    } else {
+      final theme = Theme.of(context);
+      icon = Icon(Icons.mic, color: theme.primaryColor, size: 30);
+      color = theme.primaryColor.withOpacity(0.1);
+    }
+
+    return ClipOval(
+      child: Material(
+        color: color,
+        child: InkWell(
+          child: SizedBox(width: 56, height: 56, child: icon),
+          onTap: () {
+            _isRecording ? _stop() : _start();
           },
         ),
       ),
     );
   }
+
+  Widget _buildPauseResumeControl() {
+    if (!_isRecording && !_isPaused) {
+      return const SizedBox.shrink();
+    }
+
+    late Icon icon;
+    late Color color;
+
+    if (!_isPaused) {
+      icon = Icon(Icons.pause, color: Colors.red, size: 30);
+      color = Colors.red.withOpacity(0.1);
+    } else {
+      final theme = Theme.of(context);
+      icon = Icon(Icons.play_arrow, color: Colors.red, size: 30);
+      color = theme.primaryColor.withOpacity(0.1);
+    }
+
+    return ClipOval(
+      child: Material(
+        color: color,
+        child: InkWell(
+          child: SizedBox(width: 56, height: 56, child: icon),
+          onTap: () {
+            _isPaused ? _resume() : _pause();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildText() {
+    if (_isRecording || _isPaused) {
+      return _buildTimer();
+    }
+
+    return Text("Waiting to record");
+  }
+
+  Widget _buildTimer() {
+    final String minutes = _formatNumber(_recordDuration ~/ 60);
+    final String seconds = _formatNumber(_recordDuration % 60);
+
+    return Text(
+      '$minutes : $seconds',
+      style: TextStyle(color: Colors.red),
+    );
+  }
+
+  String _formatNumber(int number) {
+    String numberStr = number.toString();
+    if (number < 10) {
+      numberStr = '0' + numberStr;
+    }
+
+    return numberStr;
+  }
+
+  Future<void> _start() async {
+    try {
+      await _audioRecorder.start();
+
+      bool isRecording = await _audioRecorder.isRecording();
+      setState(() {
+        _isRecording = isRecording;
+        _recordDuration = 0;
+      });
+
+      _startTimer();
+    } catch (e) {
+      print(e);
+    }
+  }
+
+  Future<void> _stop() async {
+    _timer?.cancel();
+    _ampTimer?.cancel();
+    final path = await _audioRecorder.stop();
+
+    widget.onStop(path!);
+
+    setState(() => _isRecording = false);
+  }
+
+  Future<void> _pause() async {
+    _timer?.cancel();
+    _ampTimer?.cancel();
+    await _audioRecorder.pause();
+
+    setState(() => _isPaused = true);
+  }
+
+  Future<void> _resume() async {
+    _startTimer();
+    await _audioRecorder.resume();
+
+    setState(() => _isPaused = false);
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _ampTimer?.cancel();
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+      setState(() => _recordDuration++);
+    });
+
+    _ampTimer =
+        Timer.periodic(const Duration(milliseconds: 200), (Timer t) async {
+      _amplitude = await _audioRecorder.getAmplitude();
+      setState(() {});
+    });
+  }
 }
 
-// // import 'dart:developer';
-// // import 'package:http/http.dart' as http;
+void main() {
+  runApp(MyApp());
+}
 
-// // import 'package:flutter/material.dart';
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
 
-// // void main() => runApp(const MaterialApp(home: MyApp2()));
+class _MyAppState extends State<MyApp> {
+  bool showPlayer = false;
+  ap.AudioSource? audioSource;
 
-// // class MyApp2 extends StatelessWidget {
-// //   const MyApp2({Key? key}) : super(key: key);
+  @override
+  void initState() {
+    showPlayer = false;
+    super.initState();
+  }
 
-// //   Future<List>? getResponse() async {
-// //     final url = "https://jsonplaceholder.typicode.com/posts";
-// //     final data = await http.get(url);
-// //   }
-
-// //   @override
-// //   void initState() {
-// //     initState();
-// //     print('object');
-// //   }
-
-// //   @override
-// //   Widget build(BuildContext context) {
-// //     return SafeArea(
-// //         child: Scaffold(
-// //       body: ListTile(
-// //         leading: Icon(Icons.wb_sunny),
-// //         title: Text('Sunday'),
-// //         subtitle: Text('sunny, h: 80, l: 65'),
-// //       ),
-// //     ));
-// //   }
-// // }
-
-// // class MYAPP3 extends StatelessWidget {
-// //   const MYAPP3({Key? key}) : super(key: key);
-
-// //   @override
-// //   Widget build(BuildContext context) {
-// //     return Scaffold(
-// //       body: ListTile(
-// //         leading: Icon(Icons.wb_sunny),
-// //         title: Text('Sunday'),
-// //         subtitle: Text('sunny, h: 80, l: 65'),
-// //       ),
-// //     );
-// //   }
-// // }
-
-// // class MyApp extends StatelessWidget {
-// //   const MyApp({Key? key}) : super(key: key);
-
-// //   @override
-// //   Widget build(BuildContext context) {
-// //     return Scaffold(
-// //       body: CustomScrollView(
-// //         physics: const BouncingScrollPhysics(
-// //             parent: AlwaysScrollableScrollPhysics()),
-// //         slivers: <Widget>[
-// //           SliverAppBar(
-// //             stretch: true,
-// //             onStretchTrigger: () {
-// //               // Function callback for stretch
-// //               return Future<void>.value();
-// //             },
-// //             expandedHeight: 300.0,
-// //             flexibleSpace: FlexibleSpaceBar(
-// //               stretchModes: const <StretchMode>[
-// //                 StretchMode.zoomBackground,
-// //                 StretchMode.blurBackground,
-// //                 StretchMode.fadeTitle,
-// //               ],
-// //               centerTitle: true,
-// //               title: const Text('Flight Report'),
-// //               background: Stack(
-// //                 fit: StackFit.expand,
-// //                 children: <Widget>[
-// //                   Image.network(
-// //                     'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl-2.jpg',
-// //                     fit: BoxFit.cover,
-// //                   ),
-// //                   const DecoratedBox(
-// //                     decoration: BoxDecoration(
-// //                       gradient: LinearGradient(
-// //                         begin: Alignment(0.0, 0.5),
-// //                         end: Alignment.center,
-// //                         colors: <Color>[
-// //                           Color(0x60000000),
-// //                           Color(0x00000000),
-// //                         ],
-// //                       ),
-// //                     ),
-// //                   ),
-// //                 ],
-// //               ),
-// //             ),
-// //           ),
-// //           SliverList(
-// //             delegate: SliverChildListDelegate(
-// //               const <Widget>[
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Sunday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 ListTile(
-// //                   leading: Icon(Icons.wb_sunny),
-// //                   title: Text('Monday'),
-// //                   subtitle: Text('sunny, h: 80, l: 65'),
-// //                 ),
-// //                 // ListTiles++
-// //               ],
-// //             ),
-// //           ),
-// //         ],
-// //       ),
-// //     );
-// //   }
-// // }
-
-// // // import 'package:flutter/material.dart';
-
-// // // void main() => runApp(const MyApp());
-
-// // // class MyApp extends StatelessWidget {
-// // //   const MyApp({Key? key}) : super(key: key);
-
-// // //   static const String _title = 'Flutter Code Sample';
-
-// // //   @override
-// // //   Widget build(BuildContext context) {
-// // //     return const MaterialApp(
-// // //       title: _title,
-// // //       home: MyStatefulWidget(),
-// // //     );
-// // //   }
-// // // }
-
-// // // class MyStatefulWidget extends StatefulWidget {
-// // //   const MyStatefulWidget({Key? key}) : super(key: key);
-
-// // //   @override
-// // //   State<MyStatefulWidget> createState() => _MyStatefulWidgetState();
-// // // }
-
-// // // class _MyStatefulWidgetState extends State<MyStatefulWidget> {
-// // //   bool _pinned = true;
-// // //   bool _snap = false;
-// // //   bool _floating = false;
-
-// // // // [SliverAppBar]s are typically used in [CustomScrollView.slivers], which in
-// // // // turn can be placed in a [Scaffold.body].
-// // //   @override
-// // //   Widget build(BuildContext context) {
-// // //     return Scaffold(
-// // //       body: CustomScrollView(
-// // //         slivers: <Widget>[
-// // //           SliverAppBar(
-// // //             pinned: _pinned,
-// // //             snap: _snap,
-// // //             floating: _floating,
-// // //             expandedHeight: 160.0,
-// // //             flexibleSpace: const FlexibleSpaceBar(
-// // //               title: Text('SliverAppBar'),
-// // //               background: FlutterLogo(),
-// // //             ),
-// // //           ),
-// // //           const SliverToBoxAdapter(
-// // //             child: SizedBox(
-// // //               height: 20,
-// // //               child: Center(
-// // //                 child: Text('Scroll to see the SliverAppBar in effect.'),
-// // //               ),
-// // //             ),
-// // //           ),
-// // //           SliverList(
-// // //             delegate: SliverChildBuilderDelegate(
-// // //               (BuildContext context, int index) {
-// // //                 return Container(
-// // //                   color: index.isOdd ? Colors.white : Colors.black12,
-// // //                   height: 100.0,
-// // //                   child: Center(
-// // //                     child: Text('$index', textScaleFactor: 5),
-// // //                   ),
-// // //                 );
-// // //               },
-// // //               childCount: 20,
-// // //             ),
-// // //           ),
-// // //         ],
-// // //       ),
-// // //       bottomNavigationBar: BottomAppBar(
-// // //         child: Padding(
-// // //           padding: const EdgeInsets.all(8),
-// // //           child: OverflowBar(
-// // //             overflowAlignment: OverflowBarAlignment.center,
-// // //             children: <Widget>[
-// // //               Row(
-// // //                 mainAxisSize: MainAxisSize.min,
-// // //                 children: <Widget>[
-// // //                   const Text('pinned'),
-// // //                   Switch(
-// // //                     onChanged: (bool val) {
-// // //                       setState(() {
-// // //                         _pinned = val;
-// // //                       });
-// // //                     },
-// // //                     value: _pinned,
-// // //                   ),
-// // //                 ],
-// // //               ),
-// // //               Row(
-// // //                 mainAxisSize: MainAxisSize.min,
-// // //                 children: <Widget>[
-// // //                   const Text('snap'),
-// // //                   Switch(
-// // //                     onChanged: (bool val) {
-// // //                       setState(() {
-// // //                         _snap = val;
-// // //                         // Snapping only applies when the app bar is floating.
-// // //                         _floating = _floating || _snap;
-// // //                       });
-// // //                     },
-// // //                     value: _snap,
-// // //                   ),
-// // //                 ],
-// // //               ),
-// // //               Row(
-// // //                 mainAxisSize: MainAxisSize.min,
-// // //                 children: <Widget>[
-// // //                   const Text('floating'),
-// // //                   Switch(
-// // //                     onChanged: (bool val) {
-// // //                       setState(() {
-// // //                         _floating = val;
-// // //                         _snap = _snap && _floating;
-// // //                       });
-// // //                     },
-// // //                     value: _floating,
-// // //                   ),
-// // //                 ],
-// // //               ),
-// // //             ],
-// // //           ),
-// // //         ),
-// // //       ),
-// // //     );
-// // //   }
-// // // }
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: showPlayer
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 25),
+                  child: Text("guru"),
+                )
+              : AudioRecorder(
+                  onStop: (path) {
+                    setState(() {
+                      audioSource = ap.AudioSource.uri(Uri.parse(path));
+                      showPlayer = true;
+                    });
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+}
